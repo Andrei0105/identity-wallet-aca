@@ -183,6 +183,8 @@ class AdminServer(BaseAdminServer):
         app = web.Application(middlewares=middlewares)
         app["request_context"] = self.context
         app["outbound_message_router"] = self.responder.send
+        # outbound router that returns the encoded message without sending it
+        app["outbound_message_router_get_encoded_messages"] = self.responder.create_outbound
 
         app.add_routes(
             [

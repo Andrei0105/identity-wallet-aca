@@ -276,6 +276,70 @@ async def presentation_exchange_send_request(request: web.BaseRequest):
 
     return web.json_response(presentation_exchange_record.serialize())
 
+from ..connections.models.connection_record import ConnectionRecord
+from ..serializer import MessageSerializer
+from ..connections.manager import ConnectionManager, ConnectionManagerError
+
+@docs(
+    tags=["presentation_exchange *DEPRECATED*"],
+    summary="Creates and retrieves the encoded message",
+)
+@request_schema(PresentationRequestRequestSchema())
+async def presentation_exchange_send_request_v2(request: web.BaseRequest):
+    """
+    Request handler for creating presentation request 
+    and retrieving the encoded message to be sent.
+
+    Args:
+        request: aiohttp request object
+
+    Returns:
+        The encoded message containing the presentation request.
+
+    """
+
+    context = request.app["request_context"]
+    # use as handler the message router that returns the message instea
+    outbound_handler = request.app["outbound_message_router_get_encoded_messages"]
+
+    body = await request.json()
+
+    (
+        presentation_exchange_record,
+        presentation_request_message,
+    ) = await _create_request_helper(context, body)
+
+    # get the unencoded message
+    message = await outbound_handler(
+        presentation_request_message,
+        connection_id=presentation_exchange_record.connection_id,
+    )
+    
+    # get the connection details required to encode the message
+    record = await ConnectionRecord.retrieve_by_id(context, message.connection_id)
+    mgr = ConnectionManager(context)
+    target = await mgr.get_connection_target(record)
+
+    if message.connection_id and not message.target:
+        message.target = target
+
+    # get a serializer and encode the message
+    message_serializer = await context.inject(MessageSerializer)
+    if not message.encoded and message.target:
+        target = message.target
+        message.payload = await message_serializer.encode_message(
+            context,
+            message.payload,
+            target.recipient_keys or [],
+            # (not direct_response) and target.routing_keys or [],
+            [],
+            target.sender_key,
+        )
+        message.encoded = True
+
+    # return the message as text
+    return web.Response(text=str(message))
+
 
 @docs(
     tags=["presentation_exchange *DEPRECATED*"],
@@ -409,6 +473,10 @@ async def register(app: web.Application):
             web.post(
                 "/presentation_exchange/send_request",
                 presentation_exchange_send_request,
+            ),
+            web.post(
+                "/presentation_exchange/send_request_v2",
+                presentation_exchange_send_request_v2,
             ),
             web.post(
                 "/presentation_exchange/{id}/send_presentation",
