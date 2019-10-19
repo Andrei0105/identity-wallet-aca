@@ -351,6 +351,66 @@ async def connections_accept_request(request: web.BaseRequest):
     await outbound_handler(request, connection_id=connection.connection_id)
     return web.json_response(connection.serialize())
 
+from ..serializer import MessageSerializer
+
+@docs(
+    tags=["connection"],
+    summary="Accept a stored connection request and get the encoded message",
+    parameters=[
+        {
+            "name": "my_endpoint",
+            "in": "query",
+            "schema": {"type": "string"},
+            "required": False,
+        }
+    ],
+)
+@response_schema(ConnectionRecordSchema(), 200)
+async def connections_accept_request_v2(request: web.BaseRequest):
+    """
+    Request handler for accepting a stored connection request
+    and getting the encoded message.
+
+    Args:
+        request: aiohttp request object
+
+    Returns:
+        The encoded response message.
+
+    """
+    context = request.app["request_context"]
+    outbound_handler = request.app["outbound_message_router_get_encoded_messages"]
+    connection_id = request.match_info["id"]
+    try:
+        connection = await ConnectionRecord.retrieve_by_id(context, connection_id)
+    except StorageNotFoundError:
+        raise web.HTTPNotFound()
+    connection_mgr = ConnectionManager(context)
+    target = await connection_mgr.get_connection_target(connection)
+    my_endpoint = request.query.get("my_endpoint") or None
+    request = await connection_mgr.create_response(connection, my_endpoint)
+    message = await outbound_handler(request, connection_id=connection.connection_id)
+
+    if message.connection_id and not message.target:
+        message.target = target
+
+    # get a serializer and encode the message
+    message_serializer = await context.inject(MessageSerializer)
+    if not message.encoded and message.target:
+        target = message.target
+        message.payload = await message_serializer.encode_message(
+            context,
+            message.payload,
+            target.recipient_keys or [],
+            # (not direct_response) and target.routing_keys or [],
+            [],
+            target.sender_key,
+        )
+        message.encoded = True
+    
+    # return the message as text
+    return web.Response(text=str(message))
+
 
 @docs(
     tags=["connection"], summary="Assign another connection as the inbound connection"
@@ -408,6 +468,7 @@ async def register(app: web.Application):
                 "/connections/{id}/accept-invitation", connections_accept_invitation
             ),
             web.post("/connections/{id}/accept-request", connections_accept_request),
+            web.post("/connections/{id}/accept-request-v2", connections_accept_request_v2),
             web.post(
                 "/connections/{id}/establish-inbound/{ref_id}",
                 connections_establish_inbound,

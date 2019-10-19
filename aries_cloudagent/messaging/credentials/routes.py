@@ -18,6 +18,8 @@ from ..valid import INDY_CRED_DEF_ID, INDY_REV_REG_ID, INDY_SCHEMA_ID
 
 from .manager import CredentialManager
 from .models.credential_exchange import CredentialExchange, CredentialExchangeSchema
+from ..connections.manager import ConnectionManager
+from ..serializer import MessageSerializer
 
 
 class CredentialSendRequestSchema(Schema):
@@ -401,6 +403,78 @@ async def credential_exchange_send_offer(request: web.BaseRequest):
     return web.json_response(credential_exchange_record.serialize())
 
 
+@docs(tags=["credential_exchange *DEPRECATED*"], summary="Sends a credential offer")
+@request_schema(CredentialOfferRequestSchema())
+@response_schema(CredentialOfferResultSchema(), 200)
+async def credential_exchange_send_offer_v2(request: web.BaseRequest):
+    """
+    Request handler for sending a credential offer.
+
+    Args:
+        request: aiohttp request object
+
+    Returns:
+        The encoded message containing the credential offer.
+
+    """
+
+    context = request.app["request_context"]
+    # use as handler the message router that returns the message instea
+    outbound_handler = request.app["outbound_message_router_get_encoded_messages"]
+
+    body = await request.json()
+
+    connection_id = body.get("connection_id")
+    credential_definition_id = body.get("credential_definition_id")
+
+    credential_manager = CredentialManager(context)
+
+    try:
+        connection_record = await ConnectionRecord.retrieve_by_id(
+            context, connection_id
+        )
+    except StorageNotFoundError:
+        raise web.HTTPBadRequest()
+
+    if not connection_record.is_ready:
+        raise web.HTTPForbidden()
+
+    credential_exchange_record = await credential_manager.create_offer(
+        credential_definition_id, connection_id
+    )
+
+    (
+        credential_exchange_record,
+        credential_offer_message,
+    ) = await credential_manager.offer_credential(credential_exchange_record)
+    
+    message = await outbound_handler(credential_offer_message, connection_id=connection_id)
+    
+    ####
+    mgr = ConnectionManager(context)
+    target = await mgr.get_connection_target(connection_record)
+
+    if message.connection_id and not message.target:
+        message.target = target
+
+    # get a serializer and encode the message
+    message_serializer = await context.inject(MessageSerializer)
+    if not message.encoded and message.target:
+        target = message.target
+        message.payload = await message_serializer.encode_message(
+            context,
+            message.payload,
+            target.recipient_keys or [],
+            # (not direct_response) and target.routing_keys or [],
+            [],
+            target.sender_key,
+        )
+        message.encoded = True
+    
+    # return the message as text
+    return web.Response(text=str(message))
+
+
 @docs(tags=["credential_exchange *DEPRECATED*"], summary="Sends a credential request")
 @response_schema(CredentialRequestResultSchema(), 200)
 async def credential_exchange_send_request(request: web.BaseRequest):
@@ -497,6 +571,78 @@ async def credential_exchange_issue(request: web.BaseRequest):
     await outbound_handler(credential_issue_message, connection_id=connection_id)
     return web.json_response(credential_exchange_record.serialize())
 
+
+@docs(tags=["credential_exchange *DEPRECATED*"], summary="Sends a credential")
+@request_schema(CredentialIssueRequestSchema())
+@response_schema(CredentialIssueResultSchema(), 200)
+async def credential_exchange_issue_v2(request: web.BaseRequest):
+    """
+    Request handler for sending a credential.
+
+    Args:
+        request: aiohttp request object
+
+    Returns:
+        The encoded message for sending the credential.
+
+    """
+    context = request.app["request_context"]
+    # use as handler the message router that returns the message instea
+    outbound_handler = request.app["outbound_message_router_get_encoded_messages"]
+
+    body = await request.json()
+    credential_values = body["credential_values"]
+
+    credential_exchange_id = request.match_info["id"]
+    credential_exchange_record = await CredentialExchange.retrieve_by_id(
+        context, credential_exchange_id
+    )
+    connection_id = credential_exchange_record.connection_id
+
+    assert credential_exchange_record.state == CredentialExchange.STATE_REQUEST_RECEIVED
+
+    credential_manager = CredentialManager(context)
+    try:
+        connection_record = await ConnectionRecord.retrieve_by_id(
+            context, connection_id
+        )
+    except StorageNotFoundError:
+        raise web.HTTPBadRequest()
+
+    if not connection_record.is_ready:
+        raise web.HTTPForbidden()
+
+    credential_exchange_record.credential_values = credential_values
+    (
+        credential_exchange_record,
+        credential_issue_message,
+    ) = await credential_manager.issue_credential(credential_exchange_record)
+
+    message = await outbound_handler(credential_issue_message, connection_id=connection_id)
+    
+    ####
+    mgr = ConnectionManager(context)
+    target = await mgr.get_connection_target(connection_record)
+
+    if message.connection_id and not message.target:
+        message.target = target
+
+    # get a serializer and encode the message
+    message_serializer = await context.inject(MessageSerializer)
+    if not message.encoded and message.target:
+        target = message.target
+        message.payload = await message_serializer.encode_message(
+            context,
+            message.payload,
+            target.recipient_keys or [],
+            # (not direct_response) and target.routing_keys or [],
+            [],
+            target.sender_key,
+        )
+        message.encoded = True
+    
+    # return the message as text
+    return web.Response(text=str(message))
 
 @docs(tags=["credential_exchange *DEPRECATED*"], summary="Stores a received credential")
 @request_schema(CredentialStoreRequestSchema())
@@ -624,10 +770,12 @@ async def register(app: web.Application):
             web.get("/credential_exchange/{id}", credential_exchange_retrieve),
             web.post("/credential_exchange/send", credential_exchange_send),
             web.post("/credential_exchange/send-offer", credential_exchange_send_offer),
+            web.post("/credential_exchange/send-offer-v2", credential_exchange_send_offer_v2),
             web.post(
                 "/credential_exchange/{id}/send-request",
                 credential_exchange_send_request,
             ),
+            web.post("/credential_exchange/{id}/issue-v2", credential_exchange_issue_v2),
             web.post("/credential_exchange/{id}/issue", credential_exchange_issue),
             web.post("/credential_exchange/{id}/store", credential_exchange_store),
             web.post(
