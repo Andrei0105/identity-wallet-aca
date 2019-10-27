@@ -81,7 +81,7 @@ async def connections_send_ping_v2(request: web.BaseRequest):
         await connection.log_activity(context, "ping", connection.DIRECTION_SENT)
 
     # return the message as text
-    return web.Response(text=str(message))
+    return web.Response(text=message.payload.decode("utf-8"))
 
 async def register(app: web.Application):
     """Register routes."""

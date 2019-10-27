@@ -409,7 +409,7 @@ async def connections_accept_request_v2(request: web.BaseRequest):
         message.encoded = True
     
     # return the message as text
-    return web.Response(text=str(message))
+    return web.Response(text=str(message.payload))
 
 
 @docs(

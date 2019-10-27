@@ -404,7 +404,7 @@ async def credential_exchange_send_offer(request: web.BaseRequest):
 
 
 @docs(tags=["credential_exchange *DEPRECATED*"], summary="Sends a credential offer")
-@request_schema(CredentialOfferRequestSchema())
+@request_schema(CredentialSendRequestSchema())
 @response_schema(CredentialOfferResultSchema(), 200)
 async def credential_exchange_send_offer_v2(request: web.BaseRequest):
     """
@@ -426,6 +426,7 @@ async def credential_exchange_send_offer_v2(request: web.BaseRequest):
 
     connection_id = body.get("connection_id")
     credential_definition_id = body.get("credential_definition_id")
+    credential_values = body.get("credential_values")
 
     credential_manager = CredentialManager(context)
 
@@ -440,7 +441,7 @@ async def credential_exchange_send_offer_v2(request: web.BaseRequest):
         raise web.HTTPForbidden()
 
     credential_exchange_record = await credential_manager.create_offer(
-        credential_definition_id, connection_id
+        credential_definition_id, connection_id, False, credential_values
     )
 
     (
@@ -470,9 +471,8 @@ async def credential_exchange_send_offer_v2(request: web.BaseRequest):
             target.sender_key,
         )
         message.encoded = True
-    
     # return the message as text
-    return web.Response(text=str(message))
+    return web.json_response('{ "message": ' + message.payload.decode("utf-8") + ' , "id": "' + credential_exchange_record.credential_exchange_id + '" }')
 
 
 @docs(tags=["credential_exchange *DEPRECATED*"], summary="Sends a credential request")
@@ -642,7 +642,7 @@ async def credential_exchange_issue_v2(request: web.BaseRequest):
         message.encoded = True
     
     # return the message as text
-    return web.Response(text=str(message))
+    return web.Response(text=message.payload.decode("utf-8"))
 
 @docs(tags=["credential_exchange *DEPRECATED*"], summary="Stores a received credential")
 @request_schema(CredentialStoreRequestSchema())
