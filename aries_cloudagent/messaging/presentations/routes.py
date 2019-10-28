@@ -338,7 +338,7 @@ async def presentation_exchange_send_request_v2(request: web.BaseRequest):
         message.encoded = True
 
     # return the message as text
-    return web.Response(text=str(message))
+    return web.json_response('{ "message": ' + message.payload.decode("utf-8") + ' , "id": "' + presentation_exchange_record.presentation_exchange_id + '" }')
 
 
 @docs(
